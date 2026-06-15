@@ -499,6 +499,38 @@ def _element_size_reliability(el: dict[str, Any]) -> float:
     return score
 
 
+def _is_baidu_text(el: dict[str, Any]) -> bool:
+    backend = str(el.get("ocr_backend") or "").strip().lower()
+    return (
+        backend == "baidu"
+        or bool(el.get("baidu_bbox_original"))
+        or bool(el.get("baidu_provider"))
+    )
+
+
+def _class_size_for_element(el: dict[str, Any], suggested: int) -> int:
+    if not _is_baidu_text(el):
+        return int(suggested)
+    current = float(el.get("size") or el.get("font_size") or suggested)
+    if float(suggested) > current:
+        return int(math.floor(current + 0.5))
+    return int(suggested)
+
+
+def _class_size_for_run(
+    el: dict[str, Any],
+    run: dict[str, Any],
+    suggested: int,
+) -> int:
+    if not _is_baidu_text(el):
+        return int(suggested)
+    current = float(run.get("size") or el.get("size")
+                    or el.get("font_size") or suggested)
+    if float(suggested) > current:
+        return int(math.floor(current + 0.5))
+    return int(suggested)
+
+
 def _suggested_class_size(values: list[float],
                           force_apply: bool = False,
                           elements: list[dict[str, Any]] | None = None) -> int:
@@ -907,9 +939,9 @@ def _run_slot_classes(texts: list[dict[str, Any]],
             and max_delta <= role_limit
         ):
             for el, run, _idx in entries:
-                run["size"] = suggested
+                run["size"] = _class_size_for_run(el, run, suggested)
                 run["style_class"] = f"{class_id}.{role}"
-                run["style_class_suggested_size"] = suggested
+                run["style_class_suggested_size"] = run["size"]
             applied = True
         if (
             apply
@@ -1636,7 +1668,9 @@ def classify_slide(slide: dict[str, Any],
                 el = texts[i]["el"]
                 el["style_class"] = class_id
                 if suggested_size is not None:
-                    el["style_class_suggested_size"] = suggested_size
+                    el["style_class_suggested_size"] = (
+                        _class_size_for_element(el, suggested_size)
+                    )
                 el["style_class_align"] = align
                 el["style_class_colour_family"] = texts[i]["colour_family"]
                 el["align"] = align
@@ -1660,7 +1694,8 @@ def classify_slide(slide: dict[str, Any],
                 and not has_explicit_mixed_runs
             ):
                 for i in members:
-                    texts[i]["el"]["size"] = suggested_size
+                    el = texts[i]["el"]
+                    el["size"] = _class_size_for_element(el, suggested_size)
                 applied_size = True
             if (
                 (force_apply or len(members) >= min_apply_size)

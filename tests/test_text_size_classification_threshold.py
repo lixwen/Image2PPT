@@ -249,6 +249,80 @@ class TextSizeClassificationThresholdTests(unittest.TestCase):
         ]
         self.assertIn("vertical_list_slot", edge_reasons)
 
+    def test_baidu_slot_size_prior_does_not_increase_text_size(self) -> None:
+        slide = {
+            "source_width": 1280,
+            "source_height": 720,
+            "elements": [
+                {"type": "image", "name": "band_1", "box": [312, 138, 698, 73]},
+                {"type": "image", "name": "band_2", "box": [312, 232, 698, 72]},
+                {"type": "image", "name": "band_3", "box": [312, 325, 698, 73]},
+                {"type": "image", "name": "lower_group", "box": [311, 299, 969, 421]},
+                {"type": "image", "name": "right_overlay", "box": [704, 299, 575, 411]},
+                {
+                    "type": "text",
+                    "name": "baidu_body_1",
+                    "text": "三大运营商每月需核对网间互联结算账单",
+                    "box": [340.12, 152.08, 613, 49],
+                    "source_bbox": [340, 152, 953, 201],
+                    "target_ink": [342, 156, 949, 196],
+                    "color": "#054798",
+                    "size": 12,
+                    "bold": True,
+                    "align": "left",
+                    "ocr_backend": "baidu",
+                },
+                {
+                    "type": "text",
+                    "name": "baidu_body_2",
+                    "text": "各家账单数据属于商业敏感信息",
+                    "box": [340.12, 240.72, 613, 49],
+                    "source_bbox": [340, 241, 953, 290],
+                    "target_ink": [342, 245, 949, 285],
+                    "color": "#054798",
+                    "size": 13,
+                    "bold": True,
+                    "align": "left",
+                    "ocr_backend": "baidu",
+                },
+                {
+                    "type": "text",
+                    "name": "baidu_body_3",
+                    "text": "既要完成核对，又要保护敏感数据",
+                    "box": [351.44, 337.64, 613, 49],
+                    "source_bbox": [351, 338, 964, 387],
+                    "target_ink": [353, 342, 960, 382],
+                    "color": "#054798",
+                    "size": 13,
+                    "bold": True,
+                    "align": "left",
+                    "ocr_backend": "baidu",
+                },
+            ],
+        }
+
+        report = classify_slide(slide, min_group_size=2, apply=True)
+
+        by_name = {
+            element["name"]: element
+            for element in slide["elements"]
+            if element.get("type") == "text"
+        }
+        self.assertEqual(by_name["baidu_body_1"]["size"], 12)
+        self.assertEqual(by_name["baidu_body_2"]["size"], 13)
+        self.assertEqual(by_name["baidu_body_3"]["size"], 13)
+        self.assertEqual(by_name["baidu_body_1"]["style_class_suggested_size"], 12)
+        baidu_class = next(
+            cls for cls in report["classes"]
+            if {m["name"] for m in cls["members"]} == {
+                "baidu_body_1",
+                "baidu_body_2",
+                "baidu_body_3",
+            }
+        )
+        self.assertEqual(baidu_class["suggested_size"], 13)
+        self.assertTrue(baidu_class["applied_text_size"])
+
 
 if __name__ == "__main__":
     unittest.main()
