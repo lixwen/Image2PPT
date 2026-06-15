@@ -320,6 +320,7 @@ class Builder:
             "size_source": el.get("size_source") or "-",
             "style_class": el.get("style_class") or "-",
             "class_size": _size_label(el.get("style_class_suggested_size")),
+            "uncapped": _size_label(el.get("render_fit_uncapped_size")),
         })
 
     def _print_baidu_trace(self) -> None:
@@ -365,7 +366,8 @@ class Builder:
                 f"s{row['slide']} {row['name']} "
                 f"write_size={row['size']} element_size={row['element_size']} "
                 f"src={row['size_source']} class={row['style_class']} "
-                f"class_size={row['class_size']} font={row['font']} "
+                f"class_size={row['class_size']} uncapped={row['uncapped']} "
+                f"font={row['font']} "
                 f"text='{_short_text(row['text'] or row['element_text'])}'",
                 flush=True,
             )

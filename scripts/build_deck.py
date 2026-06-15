@@ -279,9 +279,13 @@ def _print_baidu_text_size_summary(layout_path: Path, label: str) -> None:
         r for r in rows
         if float(r["el"].get("size") or 0) >= 16.0
     ]
+    render_fit_capped = sum(
+        1 for r in rows if r["el"].get("render_fit_size_capped")
+    )
     print(
         f"  [baidu-size:{label}] baidu_texts={len(rows)} "
         f"large>=16={len(large)} "
+        f"render_fit_capped={render_fit_capped} "
         f"sizes={dict(sorted(size_counts.items()))} "
         f"sources={dict(sorted(source_counts.items()))}",
         flush=True,
@@ -303,6 +307,7 @@ def _print_baidu_text_size_summary(layout_path: Path, label: str) -> None:
             f"src={el.get('size_source') or '-'} "
             f"class={el.get('style_class') or '-'} "
             f"class_size={_text_size_label(el.get('style_class_suggested_size'))} "
+            f"uncapped={_text_size_label(el.get('render_fit_uncapped_size'))} "
             f"runs={_run_size_summary(el)} "
             f"box={el.get('box')} "
             f"text='{_short_text(el.get('text'))}'",

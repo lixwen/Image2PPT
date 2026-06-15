@@ -149,6 +149,9 @@ def _emit_text_element_record(
         and 0.65 <= (bbox_w / float(bbox_h)) <= 1.60
     )
     render_fit = None
+    initial_size_before_render_fit = int(size)
+    render_fit_size_capped = False
+    render_fit_uncapped_size = None
     if not run_sized and not badge_like_number:
         render_fit = fit_text_render(
             safe_text, source, (int(x1), int(y1), int(x2), int(y2)),
@@ -158,7 +161,12 @@ def _emit_text_element_record(
             pt_per_px=pt_per_px,
         )
         if render_fit is not None:
-            size = int(render_fit["size"])
+            render_fit_size = int(render_fit["size"])
+            if ocr_backend == "baidu" and render_fit_size > initial_size_before_render_fit:
+                render_fit_uncapped_size = render_fit_size
+                render_fit_size = initial_size_before_render_fit
+                render_fit_size_capped = True
+            size = render_fit_size
             text_bold = bool(render_fit["bold"])
     # Tight bbox: do NOT inflate the text box beyond what OCR found.
     # 6 px right + 2 px bottom safety margin avoids font-metric clip.
@@ -187,7 +195,9 @@ def _emit_text_element_record(
     text_y = int(y1)
     valign_mode = "middle"
     if render_fit is not None:
-        text_x, text_y, text_w, text_h = render_fit["box"]
+        text_x, text_y, fit_w, fit_h = render_fit["box"]
+        if not render_fit_size_capped:
+            text_w, text_h = fit_w, fit_h
         # render_fit picks a tight box around the glyph metrics; with
         # valign=top in PowerPoint/LibreOffice the ascent line is pinned to
         # the box top, which makes the rendered text sit ~half the line
@@ -238,6 +248,9 @@ def _emit_text_element_record(
         record["render_fit_font"] = render_fit["font"]
         record["fit_target_ink"] = render_fit["target_ink"]
         record["fit_render_ink"] = render_fit["render_ink"]
+        if render_fit_size_capped:
+            record["render_fit_size_capped"] = True
+            record["render_fit_uncapped_size"] = int(render_fit_uncapped_size)
     elif mixed_size is not None:
         record["size_source"] = "mixed_runs"
         record["mixed_size"] = {
