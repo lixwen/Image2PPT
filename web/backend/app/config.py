@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     baidu_ocr_secret_key: str = ""
     baidu_ocr_access_token: str = ""
     baidu_ocr_endpoint: str = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate"
+    baidu_ocr_standard_endpoint: str = "https://aip.baidubce.com/rest/2.0/ocr/v1/general"
+    baidu_ocr_provider_order: str = "high,standard"
+    baidu_ocr_quota_fallback: bool = True
     baidu_ocr_token_url: str = "https://aip.baidubce.com/oauth/2.0/token"
     baidu_ocr_language_type: str = "CHN_ENG"
     baidu_ocr_timeout_seconds: float = 30.0

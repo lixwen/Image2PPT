@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 """Baidu OCR wrapper -> DeckWeaver OCR JSON.
 
-Implements Baidu "通用文字识别（高精度含位置版）" as documented at:
+Implements Baidu "通用文字识别（高精度含位置版）" and
+"通用文字识别（标准含位置版）" as documented at:
 https://cloud.baidu.com/doc/OCR/s/tk3h7y2aq
+https://cloud.baidu.com/doc/OCR/s/vk3h7y58v
 
 The module emits the same JSON shape as ``ocr_paddle.py`` so the rest of
 the pipeline can stay backend-neutral:
@@ -32,13 +34,39 @@ from PIL import Image
 BAIDU_ACCURATE_ENDPOINT = (
     "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate"
 )
+BAIDU_GENERAL_ENDPOINT = (
+    "https://aip.baidubce.com/rest/2.0/ocr/v1/general"
+)
 BAIDU_TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token"
 _WATERMARK_RE = re.compile(r"^(?:\d{3,4}\s*)?[0-9a-fA-F]{6,12}$")
 _URL_RE = re.compile(r"https?:/+(?:www\.)?", re.IGNORECASE)
+_PROVIDER_QUOTA_CODES = {17, 19, 216604}
+_PROVIDER_UNAVAILABLE_CODES = {6, 216102}
+_RETRYABLE_CODES = {1, 2, 4, 18, 216401, 216402, 216630}
 
 
 class BaiduOcrError(RuntimeError):
     """Raised for user-actionable Baidu OCR failures."""
+
+
+class BaiduOcrApiError(BaiduOcrError):
+    """Baidu JSON error response with parsed error_code."""
+
+    def __init__(self, code: Any, message: Any, provider: str):
+        self.error_code = _as_int(code)
+        self.error_msg = str(message or "")
+        self.provider = provider
+        code_text = code if self.error_code is None else self.error_code
+        super().__init__(
+            f"Baidu OCR provider '{provider}' API error "
+            f"{code_text}: {self.error_msg}"
+        )
+
+
+@dataclass(frozen=True)
+class BaiduOcrProvider:
+    name: str
+    endpoint: str
 
 
 def _env(*names: str, default: str = "") -> str:
@@ -66,7 +94,21 @@ def _env_float(*names: str, default: float) -> float:
     try:
         return float(value)
     except ValueError:
+            return default
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _env_bool(*names: str, default: bool) -> bool:
+    value = _env(*names)
+    if not value:
         return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _normalize_conf(value: Any, default: float = 1.0) -> float:
@@ -411,10 +453,42 @@ class BaiduOcrConfig:
     secret_key: str
     access_token: str
     endpoint: str = BAIDU_ACCURATE_ENDPOINT
+    standard_endpoint: str = BAIDU_GENERAL_ENDPOINT
+    provider_order: str = "high,standard"
+    quota_fallback: bool = True
     token_url: str = BAIDU_TOKEN_URL
     language_type: str = "CHN_ENG"
     timeout_seconds: float = 30.0
     retries: int = 2
+
+    def providers(self) -> list[BaiduOcrProvider]:
+        aliases = {
+            "high": BaiduOcrProvider("high", self.endpoint),
+            "accurate": BaiduOcrProvider("high", self.endpoint),
+            "hign": BaiduOcrProvider("high", self.endpoint),
+            "standard": BaiduOcrProvider("standard", self.standard_endpoint),
+            "general": BaiduOcrProvider("standard", self.standard_endpoint),
+        }
+        raw = (self.provider_order or "high").strip().lower()
+        if raw in {"auto", "pool", "fallback"}:
+            raw = "high,standard"
+        out: list[BaiduOcrProvider] = []
+        seen: set[tuple[str, str]] = set()
+        for part in re.split(r"[,;\s]+", raw):
+            if not part:
+                continue
+            provider = aliases.get(part)
+            if provider is None:
+                valid = ", ".join(sorted(aliases))
+                raise BaiduOcrError(
+                    f"Unknown Baidu OCR provider '{part}'. "
+                    f"Use one of: {valid}."
+                )
+            key = (provider.name, provider.endpoint)
+            if key not in seen:
+                out.append(provider)
+                seen.add(key)
+        return out or [aliases["high"]]
 
     @classmethod
     def from_env(cls) -> "BaiduOcrConfig":
@@ -437,6 +511,21 @@ class BaiduOcrConfig:
                 "DECKWEAVER_BAIDU_OCR_ENDPOINT",
                 "BAIDU_OCR_ENDPOINT",
                 default=BAIDU_ACCURATE_ENDPOINT,
+            ),
+            standard_endpoint=_env(
+                "DECKWEAVER_BAIDU_OCR_STANDARD_ENDPOINT",
+                "BAIDU_OCR_STANDARD_ENDPOINT",
+                default=BAIDU_GENERAL_ENDPOINT,
+            ),
+            provider_order=_env(
+                "DECKWEAVER_BAIDU_OCR_PROVIDER_ORDER",
+                "BAIDU_OCR_PROVIDER_ORDER",
+                default="high,standard",
+            ),
+            quota_fallback=_env_bool(
+                "DECKWEAVER_BAIDU_OCR_QUOTA_FALLBACK",
+                "BAIDU_OCR_QUOTA_FALLBACK",
+                default=True,
             ),
             token_url=_env(
                 "DECKWEAVER_BAIDU_OCR_TOKEN_URL",
@@ -466,6 +555,8 @@ class BaiduOcrClient:
         self.config = config
         self._token = config.access_token
         self._token_expiry = 0.0
+        self.last_provider = ""
+        self._disabled_providers: set[str] = set()
 
     def _post_json(
         self,
@@ -530,6 +621,72 @@ class BaiduOcrClient:
         self._token_expiry = time.time() + max(0, expires_in - 60)
         return self._token
 
+    @staticmethod
+    def _provider_disable_key(provider: BaiduOcrProvider) -> str:
+        return f"{provider.name}:{provider.endpoint}"
+
+    @staticmethod
+    def _is_provider_fallback_error(exc: BaiduOcrApiError) -> bool:
+        code = exc.error_code
+        msg = exc.error_msg.lower()
+        return (
+            code in _PROVIDER_QUOTA_CODES
+            or code in _PROVIDER_UNAVAILABLE_CODES
+            or "quota" in msg
+            or "daily request limit" in msg
+            or "total request limit" in msg
+            or "no permission" in msg
+            or "service not support" in msg
+        )
+
+    @staticmethod
+    def _is_retryable_error(exc: BaiduOcrApiError) -> bool:
+        return exc.error_code in _RETRYABLE_CODES
+
+    def _recognize_with_provider(
+        self,
+        provider: BaiduOcrProvider,
+        *,
+        token: str,
+        body: bytes,
+        min_conf: float,
+        image_size: tuple[int, int] | None,
+    ) -> list[dict]:
+        url = f"{provider.endpoint}?access_token={urllib.parse.quote(token)}"
+        last_error: BaiduOcrError | None = None
+        for attempt in range(max(1, self.config.retries + 1)):
+            try:
+                payload = self._post_json(
+                    url,
+                    data=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                if "error_code" in payload:
+                    raise BaiduOcrApiError(
+                        payload.get("error_code"),
+                        payload.get("error_msg"),
+                        provider.name,
+                    )
+                items = extract_items(payload, min_conf, image_size=image_size)
+                for item in items:
+                    item["baidu_provider"] = provider.name
+                self.last_provider = provider.name
+                return items
+            except BaiduOcrApiError as exc:
+                last_error = exc
+                if self._is_provider_fallback_error(exc):
+                    break
+                if not self._is_retryable_error(exc) or attempt >= self.config.retries:
+                    break
+                time.sleep(0.8 * (attempt + 1))
+            except BaiduOcrError as exc:
+                last_error = exc
+                if attempt >= self.config.retries:
+                    break
+                time.sleep(0.6 * (attempt + 1))
+        assert last_error is not None
+        raise last_error
+
     def recognize_image(self, image_path: Path, min_conf: float) -> list[dict]:
         token = self.access_token()
         image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
@@ -545,32 +702,47 @@ class BaiduOcrClient:
         if self.config.language_type:
             params["language_type"] = self.config.language_type
         body = urllib.parse.urlencode(params).encode("utf-8")
-        url = f"{self.config.endpoint}?access_token={urllib.parse.quote(token)}"
+        try:
+            with Image.open(image_path) as im:
+                image_size = im.size
+        except Exception:
+            image_size = None
 
+        providers = self.config.providers()
         last_error: BaiduOcrError | None = None
-        for attempt in range(max(1, self.config.retries + 1)):
+        for idx, provider in enumerate(providers):
+            disable_key = self._provider_disable_key(provider)
+            if disable_key in self._disabled_providers:
+                continue
             try:
-                payload = self._post_json(
-                    url,
-                    data=body,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                return self._recognize_with_provider(
+                    provider,
+                    token=token,
+                    body=body,
+                    min_conf=min_conf,
+                    image_size=image_size,
                 )
-                if "error_code" in payload:
-                    raise BaiduOcrError(
-                        "Baidu OCR API error "
-                        f"{payload.get('error_code')}: {payload.get('error_msg')}"
-                    )
-                try:
-                    with Image.open(image_path) as im:
-                        image_size = im.size
-                except Exception:
-                    image_size = None
-                return extract_items(payload, min_conf, image_size=image_size)
+            except BaiduOcrApiError as exc:
+                last_error = exc
+                can_fallback = (
+                    self.config.quota_fallback
+                    and self._is_provider_fallback_error(exc)
+                    and idx + 1 < len(providers)
+                )
+                if not can_fallback:
+                    break
+                self._disabled_providers.add(disable_key)
+                print(
+                    "  Baidu OCR provider "
+                    f"{provider.name} unavailable ({exc.error_code}: "
+                    f"{exc.error_msg}); falling back to {providers[idx + 1].name}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
             except BaiduOcrError as exc:
                 last_error = exc
-                if attempt >= self.config.retries:
-                    break
-                time.sleep(0.6 * (attempt + 1))
+                break
         assert last_error is not None
         raise last_error
 
@@ -660,7 +832,12 @@ def run_ocr_batch(client: BaiduOcrClient, pairs: list[tuple[Path, Path]],
             encoding="utf-8",
         )
         counts.append(len(items))
-        print(f"  {img_path.name} -> {len(items)} items", flush=True)
+        provider = client.last_provider or "unknown"
+        print(
+            f"  {img_path.name} -> {len(items)} items "
+            f"(provider={provider})",
+            flush=True,
+        )
     return counts
 
 

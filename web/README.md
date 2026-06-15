@@ -103,9 +103,11 @@ Everything is environment-driven (`web/.env` is auto-loaded). See
 | `DECKWEAVER_ADMIN_PASSWORD` | `admin` | **Change this before exposing the service.** |
 | `DECKWEAVER_JWT_SECRET` | placeholder | Long random string. Tokens are invalidated when this changes. |
 | `DECKWEAVER_PYTHON_BIN` | `python3` | Interpreter used to spawn `scripts/convert.py`. Use the same Python you ran `scripts/bootstrap.sh` with so the conversion has all its deps; for services launched outside an activated venv, use an absolute `.venv/bin/python` path. |
-| `DECKWEAVER_OCR_BACKEND` | `paddle` | `paddle` keeps OCR local. `baidu` calls Baidu OCR's online high-precision-with-position API for image inputs. |
+| `DECKWEAVER_OCR_BACKEND` | `paddle` | `paddle` keeps OCR local. `baidu` calls Baidu OCR's online API for image inputs. |
 | `DECKWEAVER_BAIDU_OCR_API_KEY` | empty | Required when `DECKWEAVER_OCR_BACKEND=baidu`. Kept out of subprocess env unless Baidu OCR is selected. |
 | `DECKWEAVER_BAIDU_OCR_SECRET_KEY` | empty | Required when `DECKWEAVER_OCR_BACKEND=baidu`. Do not commit real values. |
+| `DECKWEAVER_BAIDU_OCR_PROVIDER_ORDER` | `high,standard` | Baidu provider pool. Uses high-precision-with-position first, then standard-with-position only when high quota/permission is exhausted. Set `high` or `standard` to force one provider. |
+| `DECKWEAVER_BAIDU_OCR_QUOTA_FALLBACK` | `true` | If false, high quota/permission errors fail instead of falling back to the next provider. |
 | `DECKWEAVER_BAIDU_OCR_LANGUAGE_TYPE` | `CHN_ENG` | Passed to Baidu OCR; keep `CHN_ENG` for mixed Chinese/English slide screenshots. |
 | `DECKWEAVER_AUTO_UPDATE` | `true` | If true, the backend periodically `git fetch`es and pulls + restarts when behind. |
 | `DECKWEAVER_UPDATE_POLL_SECONDS` | `600` | Poll interval. |

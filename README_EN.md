@@ -189,6 +189,8 @@ OCR's online high-precision-with-position API, set:
 DECKWEAVER_OCR_BACKEND=baidu
 DECKWEAVER_BAIDU_OCR_API_KEY=...
 DECKWEAVER_BAIDU_OCR_SECRET_KEY=...
+# default pool: high-precision-with-position, then standard-with-position
+DECKWEAVER_BAIDU_OCR_PROVIDER_ORDER=high,standard
 ```
 
 For a Baidu-only deployment, use the minimal dependency profile:
@@ -199,9 +201,15 @@ bash scripts/bootstrap.sh --web-ocr-only
 python -m pip install -r requirements-web-ocr.txt
 ```
 
-The adapter calls Baidu's `ocr/v1/accurate` endpoint with character
-granularity, line probability, and line/character locations enabled, then
-writes the same `ocr/page_NN.ocr.json` schema as the local Paddle backend.
+The adapter calls Baidu's high-precision-with-position endpoint
+(`ocr/v1/accurate`) first and falls back to the standard-with-position
+endpoint (`ocr/v1/general`) only when the high provider reports quota,
+permission, or unsupported-service exhaustion. Both calls request character
+granularity, line probability, and line/character locations, then write the
+same `ocr/page_NN.ocr.json` schema as the local Paddle backend. To force a
+single provider, set `DECKWEAVER_BAIDU_OCR_PROVIDER_ORDER=high` or
+`DECKWEAVER_BAIDU_OCR_PROVIDER_ORDER=standard`.
+
 Only the OCR stage moves online; text erasure, layout reconstruction,
 PPTX building, and preview rendering still run locally. Features that
 depend on local OCR review or local table models still require the full
