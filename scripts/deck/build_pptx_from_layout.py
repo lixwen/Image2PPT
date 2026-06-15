@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,41 @@ def default_ppt_font() -> str:
 
 
 DEFAULT_FONT = default_ppt_font()
+
+
+def _is_baidu_text(el: dict[str, Any]) -> bool:
+    backend = str(el.get("ocr_backend") or "").strip().lower()
+    return (
+        backend == "baidu"
+        or bool(el.get("baidu_bbox_original"))
+        or bool(el.get("baidu_provider"))
+    )
+
+
+def _short_text(value: object, limit: int = 44) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _size_label(value: object) -> str:
+    if value is None:
+        return "none"
+    try:
+        return str(int(round(float(value))))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _run_size_summary(el: dict[str, Any]) -> str:
+    sizes = [
+        _size_label(run.get("size"))
+        for run in el.get("runs") or []
+        if run.get("size") is not None
+    ]
+    if not sizes:
+        return "-"
+    counts = Counter(sizes)
+    return ",".join(f"{size}:{count}" for size, count in sorted(counts.items()))
 
 
 def parse_args() -> argparse.Namespace:
@@ -151,6 +187,10 @@ class Builder:
         self.prs = Presentation()
         self.prs.slide_width = Inches(self.slide_w_in)
         self.prs.slide_height = Inches(self.slide_h_in)
+        self.trace_text_sizes = self.out.name != "calibration.pptx"
+        self._current_slide_no = 0
+        self._baidu_write_rows: list[dict[str, Any]] = []
+        self._baidu_finalizer_rows: list[dict[str, Any]] = []
 
     def x(self, value: float):
         return Inches(self.offset_x_in + float(value) * self.scale_in_per_px)
@@ -212,6 +252,123 @@ class Builder:
                 face = OxmlElement(tag)
                 r_pr.append(face)
             face.set("typeface", font)
+
+    def _snapshot_baidu_texts(
+        self,
+        elements: list[dict[str, Any]],
+    ) -> dict[int, dict[str, Any]]:
+        if not self.trace_text_sizes:
+            return {}
+        out: dict[int, dict[str, Any]] = {}
+        for el in elements:
+            if (el.get("type") or "").lower() != "text":
+                continue
+            if not _is_baidu_text(el):
+                continue
+            out[id(el)] = {
+                "name": el.get("name"),
+                "text": el.get("text"),
+                "size": _size_label(el.get("size")),
+                "runs": _run_size_summary(el),
+                "source": el.get("size_source") or "-",
+            }
+        return out
+
+    def _record_baidu_finalizer_changes(
+        self,
+        slide_no: int,
+        before: dict[int, dict[str, Any]],
+        elements: list[dict[str, Any]],
+    ) -> None:
+        if not before:
+            return
+        for el in elements:
+            if id(el) not in before:
+                continue
+            prev = before[id(el)]
+            size = _size_label(el.get("size"))
+            runs = _run_size_summary(el)
+            if size == prev["size"] and runs == prev["runs"]:
+                continue
+            self._baidu_finalizer_rows.append({
+                "slide": slide_no,
+                "name": el.get("name"),
+                "text": el.get("text"),
+                "before_size": prev["size"],
+                "after_size": size,
+                "before_runs": prev["runs"],
+                "after_runs": runs,
+                "source": el.get("size_source") or prev["source"],
+            })
+
+    def _record_baidu_write(
+        self,
+        el: dict[str, Any],
+        spec: dict[str, Any],
+        text: str,
+    ) -> None:
+        if not self.trace_text_sizes or not _is_baidu_text(el):
+            return
+        self._baidu_write_rows.append({
+            "slide": self._current_slide_no,
+            "name": el.get("name"),
+            "text": text,
+            "element_text": el.get("text"),
+            "font": spec.get("font") or spec.get("font_name") or DEFAULT_FONT,
+            "size": _size_label(spec.get("size", spec.get("font_size", 18))),
+            "element_size": _size_label(el.get("size")),
+            "size_source": el.get("size_source") or "-",
+            "style_class": el.get("style_class") or "-",
+            "class_size": _size_label(el.get("style_class_suggested_size")),
+        })
+
+    def _print_baidu_trace(self) -> None:
+        if not self.trace_text_sizes:
+            return
+        if self._baidu_finalizer_rows:
+            print(
+                f"[pptx-finalizer:baidu] changed={len(self._baidu_finalizer_rows)}",
+                flush=True,
+            )
+            for row in self._baidu_finalizer_rows[:12]:
+                print(
+                    "  "
+                    f"s{row['slide']} {row['name']} "
+                    f"size={row['before_size']}->{row['after_size']} "
+                    f"runs={row['before_runs']}->{row['after_runs']} "
+                    f"src={row['source']} "
+                    f"text='{_short_text(row['text'])}'",
+                    flush=True,
+                )
+        if not self._baidu_write_rows:
+            print("[pptx-write:baidu] runs=0", flush=True)
+            return
+        counts = Counter(row["size"] for row in self._baidu_write_rows)
+        large = [row for row in self._baidu_write_rows
+                 if float(row["size"]) >= 16.0]
+        print(
+            f"[pptx-write:baidu] runs={len(self._baidu_write_rows)} "
+            f"large>=16={len(large)} sizes={dict(sorted(counts.items()))}",
+            flush=True,
+        )
+        examples = sorted(
+            self._baidu_write_rows,
+            key=lambda row: (
+                0 if float(row["size"]) >= 16.0 else 1,
+                -float(row["size"]),
+                str(row["name"] or ""),
+            ),
+        )[:12]
+        for row in examples:
+            print(
+                "  "
+                f"s{row['slide']} {row['name']} "
+                f"write_size={row['size']} element_size={row['element_size']} "
+                f"src={row['size_source']} class={row['style_class']} "
+                f"class_size={row['class_size']} font={row['font']} "
+                f"text='{_short_text(row['text'] or row['element_text'])}'",
+                flush=True,
+            )
 
     def strip_list_marker_text(self, el: dict[str, Any], text: str) -> str:
         spec = el.get("list") or {}
@@ -363,6 +520,7 @@ class Builder:
                     if r.get("bold") is not None:
                         run_spec["bold"] = bool(r["bold"])
                     self.set_font(run, run_spec)
+                    self._record_baidu_write(el, run_spec, run.text)
         else:
             text = self.strip_list_marker_text(
                 el, ppt_safe_text(el.get("text", "")))
@@ -376,6 +534,7 @@ class Builder:
                 run = p.add_run()
                 run.text = line
                 self.set_font(run, el)
+                self._record_baidu_write(el, el, run.text)
 
     def add_image(self, slide, el: dict[str, Any]) -> None:
         left, top, width, height = el["box"]
@@ -538,6 +697,7 @@ class Builder:
             line.line.dash_style = dash
 
     def add_slide(self, spec: dict[str, Any]) -> None:
+        self._current_slide_no += 1
         self.set_slide_coordinate_space(spec)
         slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
         bg = rgb(spec.get("background", self.layout.get("background", "#FFFFFF")))
@@ -545,7 +705,10 @@ class Builder:
             slide.background.fill.solid()
             slide.background.fill.fore_color.rgb = bg
         elements = spec.get("elements", [])
+        before_baidu = self._snapshot_baidu_texts(elements)
         text_finalizers.apply_all(elements)
+        self._record_baidu_finalizer_changes(
+            self._current_slide_no, before_baidu, elements)
         for el in elements:
             kind = el.get("type", "shape").lower()
             if kind == "text":
@@ -569,6 +732,7 @@ class Builder:
             self.add_slide(spec)
         self.out.parent.mkdir(parents=True, exist_ok=True)
         self.prs.save(self.out)
+        self._print_baidu_trace()
 
 
 def run(*, layout: str, out: str,

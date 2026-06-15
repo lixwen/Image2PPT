@@ -46,6 +46,7 @@ import os
 import subprocess
 import sys
 import time
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -216,6 +217,99 @@ def banner(title: str) -> None:
     print(f"\n=== {title} ===", flush=True)
 
 
+def _is_baidu_text(el: dict) -> bool:
+    backend = str(el.get("ocr_backend") or "").strip().lower()
+    return (
+        backend == "baidu"
+        or bool(el.get("baidu_bbox_original"))
+        or bool(el.get("baidu_provider"))
+    )
+
+
+def _short_text(value: object, limit: int = 44) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _text_size_label(value: object) -> str:
+    if value is None:
+        return "none"
+    try:
+        return str(int(round(float(value))))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _run_size_summary(el: dict) -> str:
+    sizes = [
+        _text_size_label(run.get("size"))
+        for run in el.get("runs") or []
+        if run.get("size") is not None
+    ]
+    if not sizes:
+        return "-"
+    counts = Counter(sizes)
+    return ",".join(f"{size}:{count}" for size, count in sorted(counts.items()))
+
+
+def _print_baidu_text_size_summary(layout_path: Path, label: str) -> None:
+    try:
+        layout = json.loads(layout_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"  [baidu-size:{label}] unavailable: {exc}", flush=True)
+        return
+    rows: list[dict] = []
+    slides = layout.get("slides") or [layout]
+    for s_idx, slide in enumerate(slides, start=1):
+        for el in slide.get("elements") or []:
+            if (el.get("type") or "").lower() != "text":
+                continue
+            if not _is_baidu_text(el):
+                continue
+            rows.append({"slide": s_idx, "el": el})
+    if not rows:
+        print(f"  [baidu-size:{label}] baidu_texts=0", flush=True)
+        return
+
+    size_counts = Counter(_text_size_label(r["el"].get("size")) for r in rows)
+    source_counts = Counter(
+        str(r["el"].get("size_source") or "-") for r in rows
+    )
+    large = [
+        r for r in rows
+        if float(r["el"].get("size") or 0) >= 16.0
+    ]
+    print(
+        f"  [baidu-size:{label}] baidu_texts={len(rows)} "
+        f"large>=16={len(large)} "
+        f"sizes={dict(sorted(size_counts.items()))} "
+        f"sources={dict(sorted(source_counts.items()))}",
+        flush=True,
+    )
+    examples = sorted(
+        rows,
+        key=lambda r: (
+            0 if float(r["el"].get("size") or 0) >= 16.0 else 1,
+            -float(r["el"].get("size") or 0),
+            str(r["el"].get("name") or ""),
+        ),
+    )[:12]
+    for row in examples:
+        el = row["el"]
+        print(
+            "    "
+            f"s{row['slide']} {el.get('name')} "
+            f"size={_text_size_label(el.get('size'))} "
+            f"src={el.get('size_source') or '-'} "
+            f"class={el.get('style_class') or '-'} "
+            f"class_size={_text_size_label(el.get('style_class_suggested_size'))} "
+            f"runs={_run_size_summary(el)} "
+            f"box={el.get('box')} "
+            f"text='{_short_text(el.get('text'))}'",
+            flush=True,
+        )
+
+
 def _run_captured(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     """Run a subprocess and preserve its output in parent logs on failure."""
     try:
@@ -353,6 +447,7 @@ def main() -> int:
     )
     print(r.stdout.strip())
     print(f"  stage 2 done in {time.time() - ts:.1f}s", flush=True)
+    _print_baidu_text_size_summary(combined_path, "after_combine")
 
     if _should_stop_after(args, "combine"):
         print(f"\n--stop-after=combine: {combined_path}")
@@ -383,6 +478,7 @@ def main() -> int:
             print(r.stdout.strip())
         print(f"  -> {slot_report}")
         print(f"  stage 2b done in {time.time() - ts:.1f}s", flush=True)
+        _print_baidu_text_size_summary(combined_path, "after_initial_classify")
         if _should_stop_after(args, "classify"):
             print(f"\n--stop-after=classify: {slot_report}")
             return 0
@@ -419,6 +515,7 @@ def main() -> int:
         )
         if r.stdout.strip():
             print(r.stdout.strip())
+        _print_baidu_text_size_summary(combined_path, "after_pptx_build")
         print(f"  -> {pptx_path}")
         print(f"  stage 3 done in {time.time() - ts:.1f}s", flush=True)
 
@@ -437,6 +534,7 @@ def main() -> int:
         )
         if r.stdout.strip():
             print(r.stdout.strip())
+        _print_baidu_text_size_summary(combined_path, "after_size_calibration")
         slot_report = work / "debug" / "text_slot_classes.after_size.json"
         r = _run_captured(
             [sys.executable,
@@ -449,6 +547,7 @@ def main() -> int:
         )
         if r.stdout.strip():
             print(r.stdout.strip())
+        _print_baidu_text_size_summary(combined_path, "after_size_reclassify")
         # Intermediate draft pptx between size and position calibration
         # was built here for debug visibility but never consumed —
         # calibrate_text_positions reads the layout JSON, not the pptx.
@@ -469,6 +568,7 @@ def main() -> int:
         )
         if r.stdout.strip():
             print(r.stdout.strip())
+        _print_baidu_text_size_summary(combined_path, "after_position_calibration")
         slot_report = work / "debug" / "text_slot_classes.after_position.json"
         r = _run_captured(
             [sys.executable,
@@ -481,6 +581,7 @@ def main() -> int:
         )
         if r.stdout.strip():
             print(r.stdout.strip())
+        _print_baidu_text_size_summary(combined_path, "after_position_reclassify")
         print(f"  -> {slot_report}")
         r = _run_captured(
             [sys.executable,
@@ -491,6 +592,7 @@ def main() -> int:
         )
         if r.stdout.strip():
             print(r.stdout.strip())
+        _print_baidu_text_size_summary(combined_path, "after_final_pptx_build")
         print(f"  -> {pptx_path}")
         print(f"  stage 3c done in {time.time() - ts:.1f}s", flush=True)
     else:

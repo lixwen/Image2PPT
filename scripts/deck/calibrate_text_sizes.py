@@ -847,7 +847,9 @@ def _apply_iteration(layout: dict[str, Any],
                     el, target, rendered, max_scale_step, min_ratio_change)
                 basis = "bbox"
                 constrained = True
+            raw_ratio = float(ratio)
             ratio = _backend_capped_ratio(el, ratio)
+            backend_capped = _is_baidu_text(el) and ratio < raw_ratio
             old_size, new_size, changed = _scale_element_size(
                 el, ratio, min_size, max_size, constrained=constrained)
             spacing_delta = _width_char_spacing(
@@ -880,7 +882,10 @@ def _apply_iteration(layout: dict[str, Any],
                 "old_size": _clean_size(old_size),
                 "new_size": _clean_size(new_size),
                 "scale": round(float(ratio), 4),
+                "raw_scale": round(float(raw_ratio), 4),
                 "basis": basis,
+                "ocr_backend": el.get("ocr_backend"),
+                "backend_capped": backend_capped,
                 "changed": changed,
             })
     return report
@@ -925,11 +930,26 @@ def main() -> int:
                            encoding="utf-8")
     changed = sum(1 for r in all_reports
                   if r.get("status") == "calibrated" and r.get("changed"))
+    baidu_reports = [
+        r for r in all_reports
+        if str(r.get("ocr_backend") or "").strip().lower() == "baidu"
+    ]
     print(json.dumps({
         "layout": str(out_layout),
         "report": str(report_path),
         "records": len(all_reports),
         "changed": changed,
+        "baidu_records": len(baidu_reports),
+        "baidu_changed": sum(1 for r in baidu_reports if r.get("changed")),
+        "baidu_capped": sum(1 for r in baidu_reports if r.get("backend_capped")),
+        "baidu_grew": sum(
+            1 for r in baidu_reports
+            if float(r.get("new_size") or 0) > float(r.get("old_size") or 0)
+        ),
+        "baidu_large_after": sum(
+            1 for r in baidu_reports
+            if float(r.get("new_size") or 0) >= 16.0
+        ),
     }, ensure_ascii=False, indent=2))
     return 0
 
