@@ -50,20 +50,36 @@ frontend without any extra config.
 ## Dependency layout
 
 CLI-only users never need to install web-layer dependencies. The
-declarations are deliberately split into two files:
+declarations are deliberately split so Baidu/online-OCR deployments can
+avoid local OCR model stacks:
 
 | File | What it has | Who installs it |
 | --- | --- | --- |
-| `requirements.txt` (repo root) | PaddleOCR, opencv, python-pptx, … (CLI pipeline) | Anyone running `scripts/convert.py` |
+| `requirements-web-ocr.txt` (repo root) | Minimal conversion pipeline: headless OpenCV, Pillow, NumPy, PyMuPDF, python-pptx | Baidu/online-OCR-only deployments |
+| `requirements-local-ocr.txt` (repo root) | PaddleOCR, PaddlePaddle, EasyOCR, pytesseract | Local OCR and OCR-review deployments |
+| `requirements.txt` (repo root) | Full profile: web-OCR pipeline + local OCR + ONNX/font/RMBG helpers | Anyone who needs the complete local pipeline |
 | `web/backend/requirements.txt` | FastAPI, uvicorn, SQLAlchemy, passlib, bcrypt, … | Only users deploying the web layer |
 
-`scripts/bootstrap.sh` only installs the CLI side. `web/start.sh` only
-adds the web side (and only on first run, when `import fastapi` fails).
-Both sets land in the same Python interpreter — there is no separate
+`scripts/bootstrap.sh` installs the CLI side. Use
+`bash scripts/bootstrap.sh --web-ocr-only` to install only the minimal
+online-OCR pipeline and skip PaddleOCR / EasyOCR / Tesseract / ONNX model
+dependencies. `web/start.sh` only adds the web side (and only on first
+run, when `import fastapi` fails). Both sets land in the same Python
+interpreter — there is no separate
 virtualenv — so when the web backend spawns `scripts/convert.py` as a
 subprocess it inherits the OCR / pipeline dependencies the CLI user
 already has. If you want a true isolated env, create one yourself
 with `python -m venv` before running either install.
+
+For the smallest Baidu OCR web environment:
+
+```bash
+python -m pip install -r requirements-web-ocr.txt -r web/backend/requirements.txt
+```
+
+Then set `DECKWEAVER_OCR_BACKEND=baidu` and the Baidu credentials in
+`web/.env`. Local PaddleOCR, local OCR review, and table reconstruction
+still require the full dependency profile.
 
 ## Quick start (prod-ish, single port)
 

@@ -1,12 +1,6 @@
-python-pptx
-pillow
-numpy
-opencv-python
-paddlepaddle>=3,<4
-paddleocr>=3,<4
-paddlex[ocr]>=3,<4
-easyocr
-pytesseract
+# Full install profile. For a smaller Baidu/online-OCR-only environment,
+# use requirements-web-ocr.txt instead.
+-r requirements-web-ocr.txt
+-r requirements-local-ocr.txt
 onnxruntime
 huggingface_hub
-pymupdf

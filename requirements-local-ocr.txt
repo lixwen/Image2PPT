@@ -1,0 +1,8 @@
+# Local OCR and OCR-review dependencies.
+#
+# Not needed when DECKWEAVER_OCR_BACKEND=baidu and --skip-cross-verify is used.
+paddlepaddle>=3,<4
+paddleocr>=3,<4
+paddlex[ocr]>=3,<4
+easyocr
+pytesseract

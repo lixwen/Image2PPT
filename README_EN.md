@@ -84,7 +84,17 @@ cd Image2PPT
 bash scripts/bootstrap.sh
 ```
 
-`bootstrap.sh` installs Python dependencies, local OCR dependencies, LibreOffice/Poppler preview tools, and pre-downloads model caches. It works directly on macOS and common Linux distributions. On Windows or managed environments, you can install dependencies manually with `requirements.txt`.
+`bootstrap.sh` installs the full local pipeline by default: Python dependencies, local OCR dependencies, LibreOffice/Poppler preview tools, and model caches. It works directly on macOS and common Linux distributions. On Windows or managed environments, you can install dependencies manually with `requirements.txt`.
+
+If you only use an online OCR backend such as Baidu OCR, install the smaller profile instead:
+
+```bash
+bash scripts/bootstrap.sh --web-ocr-only
+# or, manually:
+python -m pip install -r requirements-web-ocr.txt
+```
+
+`requirements-web-ocr.txt` keeps PaddleOCR, PaddlePaddle, EasyOCR, Tesseract bindings, ONNX Runtime, and OCR model caches out of the environment. Use the full `requirements.txt` profile when you need local PaddleOCR, table reconstruction, or OCR cross-verification.
 
 Then run the one-command pipeline:
 
@@ -181,11 +191,21 @@ DECKWEAVER_BAIDU_OCR_API_KEY=...
 DECKWEAVER_BAIDU_OCR_SECRET_KEY=...
 ```
 
+For a Baidu-only deployment, use the minimal dependency profile:
+
+```bash
+bash scripts/bootstrap.sh --web-ocr-only
+# or:
+python -m pip install -r requirements-web-ocr.txt
+```
+
 The adapter calls Baidu's `ocr/v1/accurate` endpoint with character
 granularity, line probability, and line/character locations enabled, then
 writes the same `ocr/page_NN.ocr.json` schema as the local Paddle backend.
 Only the OCR stage moves online; text erasure, layout reconstruction,
-PPTX building, and preview rendering still run locally.
+PPTX building, and preview rendering still run locally. Features that
+depend on local OCR review or local table models still require the full
+local dependency profile.
 
 ## Common Options
 

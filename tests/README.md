@@ -96,6 +96,6 @@ regressions — adding cases never breaks the suite.
 
 ## Dependencies
 
-The suite reuses repo deps (`pillow`, `numpy`, `opencv-python`) — no new
+The suite reuses repo deps (`pillow`, `numpy`, `opencv-python-headless`) — no new
 installs needed. Fixture generation uses `codex` CLI + headless Chrome
 (both already in dev setup).

@@ -3,17 +3,19 @@
 #
 # What this does:
 #   1. Sanity-check Python and pip.
-#   2. Install all Python dependencies into the active environment.
-#   3. (macOS) Install LibreOffice + Poppler + Tesseract via Homebrew if missing.
+#   2. Install Python dependencies into the active environment.
+#   3. (macOS) Install LibreOffice + Poppler (+ Tesseract for local OCR review)
+#      via Homebrew if missing.
 #      (Linux) Install via apt if available and not already present.
-#   4. Pre-download every model the skill uses (PaddleOCR PP-OCRv5,
-#      RMBG-1.4) by calling scripts/warmup.py.
+#   4. Pre-download requested local model caches.
 #
 # Idempotent: re-running is safe; everything is skipped or cached.
 #
 # Usage:
 #   bash scripts/bootstrap.sh                # auto: ONNX CUDA wheel if
 #                                            #   nvidia-smi reports a device
+#   bash scripts/bootstrap.sh --web-ocr-only # minimal deps for
+#                                            #   DECKWEAVER_OCR_BACKEND=baidu
 #   bash scripts/bootstrap.sh --cpu          # force CPU ONNX Runtime even if
 #                                            #   a GPU is detected
 #   bash scripts/bootstrap.sh --skip-rmbg    # skip optional RMBG model
@@ -24,13 +26,17 @@ set -euo pipefail
 SKIP_RMBG=0
 NO_SYSTEM=0
 FORCE_CPU=0
+WEB_OCR_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         --skip-rmbg)  SKIP_RMBG=1 ;;
         --no-system)  NO_SYSTEM=1 ;;
         --cpu)        FORCE_CPU=1 ;;
+        --web-ocr-only|--ocr-backend=baidu|--ocr-backend=online)
+                      WEB_OCR_ONLY=1
+                      SKIP_RMBG=1 ;;
         -h|--help)
-            sed -n '2,21p' "$0"
+            sed -n '2,23p' "$0"
             exit 0 ;;
         *)
             echo "Unknown flag: $arg" >&2
@@ -65,37 +71,41 @@ fi
 echo
 echo "=== 2/4 Python dependencies ==="
 python3 -m pip install --upgrade pip
-# PaddleOCR 3.x needs PaddlePaddle 3.x APIs. The PyPI
-# `paddlepaddle-gpu` wheel currently resolves to 2.6.x in this
-# environment, which is not compatible, so remove it before installing
-# the supported CPU Paddle wheel below.
-python3 -m pip uninstall -y paddlepaddle-gpu || true
-# Common deps — same regardless of CPU/GPU.
-python3 -m pip install \
-    python-pptx pillow numpy opencv-python \
-    'paddlepaddle>=3,<4' 'paddleocr>=3,<4' 'paddlex[ocr]>=3,<4' \
-    easyocr pytesseract \
-    huggingface_hub
-
-if [ "$USE_GPU" -eq 1 ]; then
-    echo
-    echo "  NVIDIA GPU detected — installing ONNX Runtime CUDA wheel."
-    echo "  PaddleOCR stays on PaddlePaddle 3.x CPU wheels; PyPI GPU"
-    echo "  wheels are 2.6.x here and are incompatible with PaddleOCR 3.x."
-    python3 -m pip uninstall -y onnxruntime || true
-    python3 -m pip install onnxruntime-gpu
+if [ "$WEB_OCR_ONLY" -eq 1 ]; then
+    echo "  Installing minimal online-OCR profile."
+    echo "  Skipping PaddleOCR / EasyOCR / Tesseract / ONNX model deps."
+    python3 -m pip install -r requirements-web-ocr.txt
 else
-    if [ "$FORCE_CPU" -eq 1 ]; then
-        echo "  --cpu set: installing CPU wheels."
+    # Common conversion deps.
+    python3 -m pip install -r requirements-web-ocr.txt
+    # PaddleOCR 3.x needs PaddlePaddle 3.x APIs. The PyPI
+    # `paddlepaddle-gpu` wheel currently resolves to 2.6.x in this
+    # environment, which is not compatible, so remove it before installing
+    # the supported CPU Paddle wheel below.
+    python3 -m pip uninstall -y paddlepaddle-gpu || true
+    python3 -m pip install -r requirements-local-ocr.txt
+    python3 -m pip install huggingface_hub
+
+    if [ "$USE_GPU" -eq 1 ]; then
+        echo
+        echo "  NVIDIA GPU detected — installing ONNX Runtime CUDA wheel."
+        echo "  PaddleOCR stays on PaddlePaddle 3.x CPU wheels; PyPI GPU"
+        echo "  wheels are 2.6.x here and are incompatible with PaddleOCR 3.x."
+        python3 -m pip uninstall -y onnxruntime || true
+        python3 -m pip install onnxruntime-gpu
     else
-        echo "  No NVIDIA GPU detected — installing CPU wheels."
+        if [ "$FORCE_CPU" -eq 1 ]; then
+            echo "  --cpu set: installing CPU wheels."
+        else
+            echo "  No NVIDIA GPU detected — installing CPU wheels."
+        fi
+        python3 -m pip install onnxruntime
     fi
-    python3 -m pip install onnxruntime
 fi
 
 if [ "$NO_SYSTEM" -eq 0 ]; then
     echo
-    echo "=== 3/4 System tools (libreoffice + poppler + tesseract) ==="
+    echo "=== 3/4 System tools (libreoffice + poppler; tesseract for local OCR review) ==="
     OS="$(uname -s)"
     if [ "$OS" = "Darwin" ]; then
         if ! command -v brew >/dev/null 2>&1; then
@@ -106,10 +116,12 @@ if [ "$NO_SYSTEM" -eq 0 ]; then
                 [ -x /Applications/LibreOffice.app/Contents/MacOS/soffice ] || \
                 brew install --cask libreoffice
             command -v pdftoppm >/dev/null 2>&1 || brew install poppler
-            command -v tesseract >/dev/null 2>&1 || brew install tesseract
-            if command -v tesseract >/dev/null 2>&1 && \
-               ! tesseract --list-langs 2>/dev/null | grep -qx chi_sim; then
-                brew install tesseract-lang
+            if [ "$WEB_OCR_ONLY" -eq 0 ]; then
+                command -v tesseract >/dev/null 2>&1 || brew install tesseract
+                if command -v tesseract >/dev/null 2>&1 && \
+                   ! tesseract --list-langs 2>/dev/null | grep -qx chi_sim; then
+                    brew install tesseract-lang
+                fi
             fi
         fi
     elif [ "$OS" = "Linux" ]; then
@@ -120,10 +132,12 @@ if [ "$NO_SYSTEM" -eq 0 ]; then
             need_tess_lang=0
             command -v soffice  >/dev/null 2>&1 || need_libre=1
             command -v pdftoppm >/dev/null 2>&1 || need_pdf=1
-            command -v tesseract >/dev/null 2>&1 || need_tess=1
-            if command -v tesseract >/dev/null 2>&1 && \
-               ! tesseract --list-langs 2>/dev/null | grep -qx chi_sim; then
-                need_tess_lang=1
+            if [ "$WEB_OCR_ONLY" -eq 0 ]; then
+                command -v tesseract >/dev/null 2>&1 || need_tess=1
+                if command -v tesseract >/dev/null 2>&1 && \
+                   ! tesseract --list-langs 2>/dev/null | grep -qx chi_sim; then
+                    need_tess_lang=1
+                fi
             fi
             if [ "$need_libre" -eq 1 ] || [ "$need_pdf" -eq 1 ] || \
                [ "$need_tess" -eq 1 ] || [ "$need_tess_lang" -eq 1 ]; then
@@ -137,13 +151,25 @@ if [ "$NO_SYSTEM" -eq 0 ]; then
                 # shellcheck disable=SC2086
                 sudo apt-get install -y $pkgs
             else
-                echo "libreoffice + poppler + tesseract already installed."
+                if [ "$WEB_OCR_ONLY" -eq 1 ]; then
+                    echo "libreoffice + poppler already installed."
+                else
+                    echo "libreoffice + poppler + tesseract already installed."
+                fi
             fi
         else
-            echo "WARN: apt-get not found; install libreoffice, poppler, and tesseract manually."
+            if [ "$WEB_OCR_ONLY" -eq 1 ]; then
+                echo "WARN: apt-get not found; install libreoffice and poppler manually."
+            else
+                echo "WARN: apt-get not found; install libreoffice, poppler, and tesseract manually."
+            fi
         fi
     else
-        echo "WARN: unknown OS '$OS'; install libreoffice, poppler, and tesseract manually."
+        if [ "$WEB_OCR_ONLY" -eq 1 ]; then
+            echo "WARN: unknown OS '$OS'; install libreoffice and poppler manually."
+        else
+            echo "WARN: unknown OS '$OS'; install libreoffice, poppler, and tesseract manually."
+        fi
     fi
 else
     echo "Skipping system tools (--no-system)."
@@ -152,9 +178,18 @@ fi
 echo
 echo "=== 4/4 Warm up model caches ==="
 WARMUP_ARGS=()
+[ "$WEB_OCR_ONLY" -eq 1 ] && WARMUP_ARGS+=("--skip-paddle")
 [ "$SKIP_RMBG" -eq 1 ] && WARMUP_ARGS+=("--skip-rmbg")
-python3 scripts/warmup.py "${WARMUP_ARGS[@]}"
+if [ "$WEB_OCR_ONLY" -eq 1 ] && [ "$SKIP_RMBG" -eq 1 ]; then
+    echo "Skipping local model warmup (--web-ocr-only)."
+else
+    python3 scripts/warmup.py "${WARMUP_ARGS[@]}"
+fi
 
 echo
 echo "Bootstrap complete. Try a single-page run:"
-echo "  python3 scripts/ocr/ocr_paddle.py path/to/slide.jpg > /tmp/ocr.json"
+if [ "$WEB_OCR_ONLY" -eq 1 ]; then
+    echo "  DECKWEAVER_OCR_BACKEND=baidu python3 scripts/convert.py --source path/to/slide.png --ocr-backend baidu"
+else
+    echo "  python3 scripts/ocr/ocr_paddle.py path/to/slide.jpg > /tmp/ocr.json"
+fi
