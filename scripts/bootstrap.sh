@@ -12,10 +12,10 @@
 # Idempotent: re-running is safe; everything is skipped or cached.
 #
 # Usage:
-#   bash scripts/bootstrap.sh                # auto: GPU wheels if nvidia-smi
-#                                            #   is present, otherwise CPU wheels
-#   bash scripts/bootstrap.sh --cpu          # force CPU wheels even if a GPU
-#                                            #   is detected
+#   bash scripts/bootstrap.sh                # auto: ONNX CUDA wheel if
+#                                            #   nvidia-smi reports a device
+#   bash scripts/bootstrap.sh --cpu          # force CPU ONNX Runtime even if
+#                                            #   a GPU is detected
 #   bash scripts/bootstrap.sh --skip-rmbg    # skip optional RMBG model
 #   bash scripts/bootstrap.sh --no-system    # skip system tools
 #                                            #   (only pip + warmup)
@@ -38,10 +38,9 @@ for arg in "$@"; do
     esac
 done
 
-# Auto-detect GPU: install CUDA wheels iff nvidia-smi is on PATH AND it
-# actually reports a device. `nvidia-smi -L` exits non-zero (and prints
-# nothing) when no driver / device is visible, so this avoids installing
-# GPU wheels on hosts that just have the binary lying around.
+# Auto-detect GPU: install the ONNX Runtime CUDA wheel iff nvidia-smi is
+# on PATH AND it actually reports a device. `nvidia-smi -L` exits
+# non-zero (and prints nothing) when no driver / device is visible.
 USE_GPU=0
 if [ "$FORCE_CPU" -eq 0 ] && command -v nvidia-smi >/dev/null 2>&1 \
    && nvidia-smi -L >/dev/null 2>&1; then
@@ -66,22 +65,25 @@ fi
 echo
 echo "=== 2/4 Python dependencies ==="
 python3 -m pip install --upgrade pip
+# PaddleOCR 3.x needs PaddlePaddle 3.x APIs. The PyPI
+# `paddlepaddle-gpu` wheel currently resolves to 2.6.x in this
+# environment, which is not compatible, so remove it before installing
+# the supported CPU Paddle wheel below.
+python3 -m pip uninstall -y paddlepaddle-gpu || true
 # Common deps — same regardless of CPU/GPU.
 python3 -m pip install \
     python-pptx pillow numpy opencv-python \
-    'paddleocr>=3' 'paddlex[ocr]' \
+    'paddlepaddle>=3,<4' 'paddleocr>=3,<4' 'paddlex[ocr]>=3,<4' \
     easyocr pytesseract \
     huggingface_hub
 
 if [ "$USE_GPU" -eq 1 ]; then
     echo
-    echo "  NVIDIA GPU detected — installing CUDA wheels"
-    echo "  (paddlepaddle-gpu + onnxruntime-gpu). Pass --cpu to opt out."
-    # PaddlePaddle ships separate CPU and GPU wheels. Uninstall the CPU
-    # wheel first so pip doesn't keep both around with conflicting
-    # binaries (which silently picks the wrong one at import time).
-    python3 -m pip uninstall -y paddlepaddle onnxruntime || true
-    python3 -m pip install paddlepaddle-gpu onnxruntime-gpu
+    echo "  NVIDIA GPU detected — installing ONNX Runtime CUDA wheel."
+    echo "  PaddleOCR stays on PaddlePaddle 3.x CPU wheels; PyPI GPU"
+    echo "  wheels are 2.6.x here and are incompatible with PaddleOCR 3.x."
+    python3 -m pip uninstall -y onnxruntime || true
+    python3 -m pip install onnxruntime-gpu
 else
     if [ "$FORCE_CPU" -eq 1 ]; then
         echo "  --cpu set: installing CPU wheels."

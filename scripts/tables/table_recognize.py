@@ -97,6 +97,11 @@ def quiet_paddle() -> None:
     warnings.filterwarnings("ignore")
     os.environ.setdefault("GLOG_minloglevel", "3")
     os.environ.setdefault("FLAGS_print_log", "0")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+    os.environ.setdefault("PADDLE_PDX_CPU_NUM_THREADS", "4")
 
 
 def _poly_to_aabb(poly) -> tuple[int, int, int, int]:
@@ -246,7 +251,12 @@ def main() -> int:
         crop.save(tf.name)
         crop_path = tf.name
     try:
-        model = create_model(model_name=args.model, device=paddle_device())
+        model = create_model(
+            model_name=args.model,
+            device=paddle_device(),
+            enable_mkldnn=False,
+            cpu_threads=4,
+        )
         results = list(model.predict(crop_path))
     finally:
         try:

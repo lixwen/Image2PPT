@@ -119,6 +119,7 @@ def render_annotated_page(image_path: Path, entries: list[dict],
     rows = []
     for display_pos, e in enumerate(entries, 1):
         cand = e.get("candidates", {})
+        primary_label = str(e.get("primary_ocr_label") or "PP")
         pp = cand.get("paddle",      {"text": "", "conf": 0.0})
         ez = cand.get("easyocr",     {"text": "", "conf": 0.0})
         ts = cand.get("tesseract",   {"text": "", "conf": 0.0})
@@ -137,6 +138,7 @@ def render_annotated_page(image_path: Path, entries: list[dict],
             "ts_conf": ts.get("conf", 0.0),
             "pc_text": (pc or {}).get("text", "") if pc is not None else None,
             "pc_conf": (pc or {}).get("conf", 0.0) if pc is not None else None,
+            "primary_label": primary_label,
         })
 
     # Calculate legend height: header row + per-entry block.
@@ -193,7 +195,7 @@ def render_annotated_page(image_path: Path, entries: list[dict],
         # present when the entry was originally RED and rescue ran),
         # EZ = EasyOCR, TS = Tesseract.
         cand_lines = [
-            ("PP", r["pp_text"], r["pp_conf"]),
+            (r["primary_label"], r["pp_text"], r["pp_conf"]),
             ("EZ", r["ez_text"], r["ez_conf"]),
             ("TS", r["ts_text"], r["ts_conf"]),
         ]

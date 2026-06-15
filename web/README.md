@@ -86,7 +86,11 @@ Everything is environment-driven (`web/.env` is auto-loaded). See
 | `DECKWEAVER_ADMIN_USERNAME` | `admin` | Seeded on first launch if no admin exists. |
 | `DECKWEAVER_ADMIN_PASSWORD` | `admin` | **Change this before exposing the service.** |
 | `DECKWEAVER_JWT_SECRET` | placeholder | Long random string. Tokens are invalidated when this changes. |
-| `DECKWEAVER_PYTHON_BIN` | `python3` | Interpreter used to spawn `scripts/convert.py`. Use the same Python you ran `scripts/bootstrap.sh` with so the conversion has all its deps. |
+| `DECKWEAVER_PYTHON_BIN` | `python3` | Interpreter used to spawn `scripts/convert.py`. Use the same Python you ran `scripts/bootstrap.sh` with so the conversion has all its deps; for services launched outside an activated venv, use an absolute `.venv/bin/python` path. |
+| `DECKWEAVER_OCR_BACKEND` | `paddle` | `paddle` keeps OCR local. `baidu` calls Baidu OCR's online high-precision-with-position API for image inputs. |
+| `DECKWEAVER_BAIDU_OCR_API_KEY` | empty | Required when `DECKWEAVER_OCR_BACKEND=baidu`. Kept out of subprocess env unless Baidu OCR is selected. |
+| `DECKWEAVER_BAIDU_OCR_SECRET_KEY` | empty | Required when `DECKWEAVER_OCR_BACKEND=baidu`. Do not commit real values. |
+| `DECKWEAVER_BAIDU_OCR_LANGUAGE_TYPE` | `CHN_ENG` | Passed to Baidu OCR; keep `CHN_ENG` for mixed Chinese/English slide screenshots. |
 | `DECKWEAVER_AUTO_UPDATE` | `true` | If true, the backend periodically `git fetch`es and pulls + restarts when behind. |
 | `DECKWEAVER_UPDATE_POLL_SECONDS` | `600` | Poll interval. |
 | `DECKWEAVER_GIT_BRANCH` | `main` | Branch tracked for auto-update. |
@@ -168,7 +172,7 @@ DeckWeaver Web is designed to run in two modes:
 | **Upload hardening** | Per-file and per-request size caps, file-count cap, file-extension whitelist, magic-byte sanity check, zip-slip / zip-bomb / symlink-in-zip protection | [routes/jobs.py](backend/app/routes/jobs.py) |
 | **Per-user limits** | Max concurrent (`queued`+`running`) jobs per user (default 2), max total stored jobs per user (default 50). Returns `429`/`409` to abusers | [routes/jobs.py:create_job](backend/app/routes/jobs.py) |
 | **Subprocess sandbox** | `convert.py` is spawned through a FS sandbox so it can only write to its own job dirs + model caches + `/tmp` + `/dev`. Auto-detected: `sandbox-exec` on macOS, `bwrap` or `firejail` on Linux | [sandbox.py](backend/app/sandbox.py) |
-| **Resource limits** | `RLIMIT_AS` (memory), `RLIMIT_CPU` (CPU time), `RLIMIT_FSIZE` (single-file size) applied via `preexec_fn` so they propagate to every descendant (including LibreOffice) | [sandbox.py:make_preexec](backend/app/sandbox.py) |
+| **Resource limits** | `RLIMIT_CPU` (CPU time) and `RLIMIT_FSIZE` (single-file size) applied via `preexec_fn` so they propagate to every descendant (including LibreOffice). `RLIMIT_AS` is opt-in via `DECKWEAVER_SUBPROCESS_MEMORY_MB`; the default is `0` because PaddleOCR reserves large virtual address space even for small jobs | [sandbox.py:make_preexec](backend/app/sandbox.py) |
 | **Env scrubbing** | The subprocess sees only an explicit whitelist of env vars (PATH, HOME, locale, model-cache dirs, the GPU toggle). Secrets in the web server's env never reach `convert.py` | [sandbox.py:safe_env](backend/app/sandbox.py) |
 | **HTTP hardening** | CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, HSTS. Outer body-size guard rejects oversized requests before route reads body | [middleware.py](backend/app/middleware.py) |
 | **Auto-update is OFF by default** | A compromised upstream auto-pull = RCE. Opt in with `DECKWEAVER_AUTO_UPDATE=true` only when you trust the publisher | [config.py](backend/app/config.py), [github_sync.py](backend/app/github_sync.py) |

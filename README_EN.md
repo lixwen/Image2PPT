@@ -140,17 +140,20 @@ python scripts/build_deck.py \
 
 If `build_deck.py` reports uncertain OCR entries, open `ocr/page_NN.ocr_review.annotated.png` to inspect the highlighted text, edit `corrected_text` in the corresponding `ocr_review.json`, then rerun the last two steps. By default, when `--skip-render` is not used, `build_deck.py` first renders text-only calibration previews to adjust font sizes, then runs multiple passes to adjust text box positions.
 
-## GPU Acceleration (automatic)
+## GPU Acceleration
 
 The hot loop is PaddleOCR (PP-OCRv5) plus the optional PaddleX table model
-and ONNX RMBG. `bootstrap.sh` auto-detects: if `nvidia-smi` is on PATH and
-reports a device, it installs the CUDA wheels (`paddlepaddle-gpu` +
-`onnxruntime-gpu`); otherwise it installs the CPU wheels. The runtime code
-also auto-detects, so you don't need any extra flag to actually use the GPU.
+and ONNX RMBG. PaddleOCR uses the PaddlePaddle 3.x CPU wheel by default:
+the PyPI `paddlepaddle-gpu` wheel currently resolves to 2.6.x in this
+environment, which is incompatible with PaddleOCR/PaddleX 3.x.
+
+`bootstrap.sh` still auto-detects NVIDIA for ONNX Runtime: if `nvidia-smi`
+is on PATH and reports a device, it installs `onnxruntime-gpu`; otherwise
+it installs the CPU `onnxruntime` wheel.
 
 ```bash
-bash scripts/bootstrap.sh          # auto GPU or CPU
-bash scripts/bootstrap.sh --cpu    # force CPU wheels even with a GPU present
+bash scripts/bootstrap.sh          # auto ONNX CUDA or CPU
+bash scripts/bootstrap.sh --cpu    # force CPU ONNX Runtime even with a GPU present
 ```
 
 To temporarily flip between GPU and CPU at run time (debugging,
@@ -158,7 +161,7 @@ benchmarking), set an env var:
 
 ```bash
 DECKWEAVER_DEVICE=cpu  python scripts/convert.py --source ...   # force CPU
-DECKWEAVER_DEVICE=gpu  python scripts/convert.py --source ...   # force-request GPU
+DECKWEAVER_DEVICE=gpu  python scripts/convert.py --source ...   # request GPU where available
 DECKWEAVER_DEVICE=auto python scripts/convert.py --source ...   # default
 ```
 
@@ -166,6 +169,23 @@ Note: on macOS (including Apple Silicon) only the ONNX CoreML path is kept;
 PaddlePaddle has no upstream MPS backend, so requesting GPU there falls
 back to CPU. EasyOCR's MPS path stays off by default — it warns on every
 load and the speedup on tiny per-line crops is negligible.
+
+## Online OCR
+
+Image inputs use local PaddleOCR by default. To move OCR work to Baidu
+OCR's online high-precision-with-position API, set:
+
+```bash
+DECKWEAVER_OCR_BACKEND=baidu
+DECKWEAVER_BAIDU_OCR_API_KEY=...
+DECKWEAVER_BAIDU_OCR_SECRET_KEY=...
+```
+
+The adapter calls Baidu's `ocr/v1/accurate` endpoint with character
+granularity, line probability, and line/character locations enabled, then
+writes the same `ocr/page_NN.ocr.json` schema as the local Paddle backend.
+Only the OCR stage moves online; text erasure, layout reconstruction,
+PPTX building, and preview rendering still run locally.
 
 ## Common Options
 

@@ -118,8 +118,10 @@ def _emit_text_element_record(
     ink_h = style.pop("ink_h", None)
     effective_h = int(y2 - y1)
     visible_chars = sum(1 for c in raw_text if c.strip() and c != "\n")
+    ocr_backend = str(el.get("ocr_backend") or "")
+    ink_ratio = 0.72 if ocr_backend == "baidu" else 0.5
     if (ink_h and effective_h > 30 and visible_chars >= 3
-            and ink_h <= 0.5 * effective_h):
+            and ink_h <= ink_ratio * effective_h):
         effective_h = ink_h
     size = font_size_pt(safe_text, x2 - x1, effective_h,
                         pt_per_px=pt_per_px)
@@ -208,6 +210,10 @@ def _emit_text_element_record(
         "color": style["color"], "align": align, "valign": valign_mode,
         "line_spacing": 1.0,
     }
+    if ocr_backend:
+        record["ocr_backend"] = ocr_backend
+    if el.get("baidu_bbox_original"):
+        record["baidu_bbox_original"] = list(el["baidu_bbox_original"])
     if font_pred is not None:
         record["font_pred"] = {
             "family": font_pred["family"],

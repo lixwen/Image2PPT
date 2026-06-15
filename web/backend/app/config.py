@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     # Defaults to off because EasyOCR pulls in torch (~1 GB of CUDA
     # wheels). Set to true only when both are installed.
     cross_verify: bool = False
+    # OCR backend for image inputs. "paddle" keeps all OCR local;
+    # "baidu" calls Baidu OCR's online API and requires the credentials
+    # below. PDF text-layer extraction is unaffected.
+    ocr_backend: str = "paddle"
+    baidu_ocr_api_key: str = ""
+    baidu_ocr_secret_key: str = ""
+    baidu_ocr_access_token: str = ""
+    baidu_ocr_endpoint: str = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate"
+    baidu_ocr_token_url: str = "https://aip.baidubce.com/oauth/2.0/token"
+    baidu_ocr_language_type: str = "CHN_ENG"
+    baidu_ocr_timeout_seconds: float = 30.0
+    baidu_ocr_retries: int = 2
 
     # GitHub auto-update — OFF by default. Enabling pulls remote code
     # and re-execs the server, so a compromised upstream becomes RCE.
@@ -64,7 +76,9 @@ class Settings(BaseSettings):
     # once caches are warm you can set this to false for a tighter posture.
     sandbox_allow_network: bool = True
     # Conversion subprocess caps. 0 = disabled.
-    subprocess_memory_mb: int = 6144      # 6 GB virtual memory
+    # 0 = disabled. RLIMIT_AS caps virtual address space, not RSS; Paddle
+    # can reserve enough virtual memory that a low cap fails small jobs.
+    subprocess_memory_mb: int = 0
     subprocess_cpu_seconds: int = 3600    # 60 min CPU
     subprocess_output_mb: int = 512       # max single file written by child
 

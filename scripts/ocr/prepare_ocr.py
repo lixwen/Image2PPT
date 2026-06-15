@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -98,6 +99,8 @@ REVIEW_INSTRUCTIONS = (
 
 
 def parse_args() -> argparse.Namespace:
+    default_backend = os.environ.get("DECKWEAVER_OCR_BACKEND", "paddle")
+    default_backend = default_backend.strip().lower() or "paddle"
     p = argparse.ArgumentParser(
         description="Batch OCR + 3-engine cross-verify + autoclear + "
                     "annotated review images in one process."
@@ -112,10 +115,14 @@ def parse_args() -> argparse.Namespace:
                         "Default: every supported page_* image in "
                         "--source-dir.")
     p.add_argument("--lang", default="ch", help="PaddleOCR lang (default ch).")
+    p.add_argument("--ocr-backend", choices=["paddle", "baidu"],
+                   default=default_backend,
+                   help="OCR backend for image inputs (default: env "
+                        "DECKWEAVER_OCR_BACKEND or paddle).")
     p.add_argument("--min-conf", type=float, default=0.5,
-                   help="Minimum Paddle confidence to emit (default 0.5).")
+                   help="Minimum OCR confidence to emit (default 0.5).")
     p.add_argument("--threshold", type=float, default=0.95,
-                   help="Review queueing threshold; Paddle entries below "
+                   help="Review queueing threshold; OCR entries below "
                         "this go through 3-engine cross-verify (default 0.95).")
     p.add_argument("--padding", type=int, default=6,
                    help="Padding around OCR bbox when cropping for "
@@ -153,6 +160,7 @@ def run_ocr_batch(ocr, pairs: list[tuple[Path, Path]],
     """
     counts = []
     for img_path, out_path in pairs:
+        out_path.unlink(missing_ok=True)
         if not img_path.exists():
             print(f"  SKIP missing: {img_path}", file=sys.stderr)
             counts.append(0)
@@ -179,8 +187,9 @@ def build_review_packet(ocr_path: Path, image_path: Path, *,
                         padding: int, max_entries: int,
                         high_conf: float, moderate_conf: float,
                         do_cross_verify: bool,
-                        paddle_model=None) -> dict:
-    """Run 3-engine cross-verify on low-confidence Paddle entries and
+                        paddle_model=None,
+                        primary_ocr_label: str = "PP") -> dict:
+    """Run 3-engine cross-verify on low-confidence OCR entries and
     write the review packet.
 
     The review JSON's `entries` look like:
@@ -274,6 +283,7 @@ def build_review_packet(ocr_path: Path, image_path: Path, *,
             tier_count[xv.tier] += 1
             entries.append({
                 "idx": idx,
+                "primary_ocr_label": primary_ocr_label,
                 "original_text": item["text"],
                 "confidence": float(item.get("confidence", 0.0)),
                 "bbox": [int(item["x1"]), int(item["y1"]),
@@ -288,6 +298,7 @@ def build_review_packet(ocr_path: Path, image_path: Path, *,
 
     review = {
         "_instructions": REVIEW_INSTRUCTIONS,
+        "primary_ocr_label": primary_ocr_label,
         "source_ocr": str(ocr_path),
         "source_image": str(image_path),
         "threshold": threshold,
@@ -354,35 +365,55 @@ def main() -> int:
 
     image_w, image_h = parse_size(args.image_size)
 
-    # ---- Stage 1: PaddleOCR (warm model, all pages) ----
-    quiet_paddle()
-    try:
-        from paddleocr import PaddleOCR
-    except ImportError:
-        print("ERROR: paddleocr not installed. Run: "
-              "pip install 'paddleocr>=3' 'paddlex[ocr]'",
-              file=sys.stderr)
-        return 1
-
-    device = paddle_device()
-    print(f"\n=== Stage 1: PaddleOCR ({len(nums)} pages, warm model, "
-          f"device={device}) ===", flush=True)
+    # ---- Stage 1: OCR (all pages) ----
     t0 = time.time()
-    ocr = PaddleOCR(
-        lang=args.lang,
-        device=device,
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-        # Emit per-character bboxes so inventory_to_layout.py can do
-        # per-character color sampling (in-bbox color changes).
-        return_word_box=True,
-    )
     pairs = [(image_paths[n], ocr_dir / f"page_{n}.ocr.json")
              for n in nums]
-    counts = run_ocr_batch(ocr, pairs, args.min_conf)
-    print(f"  PaddleOCR done in {time.time() - t0:.1f}s "
-          f"({sum(counts)} total detections)", flush=True)
+    ocr = None
+    if args.ocr_backend == "baidu":
+        from ocr_baidu import BaiduOcrClient, BaiduOcrConfig
+        from ocr_baidu import run_ocr_batch as run_baidu_ocr_batch
+
+        print(f"\n=== Stage 1: Baidu OCR ({len(nums)} pages, online API) ===",
+              flush=True)
+        client = BaiduOcrClient(BaiduOcrConfig.from_env())
+        counts = run_baidu_ocr_batch(client, pairs, args.min_conf)
+        primary_ocr_label = "BD"
+    else:
+        quiet_paddle()
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError:
+            print("ERROR: paddleocr not installed. Run: "
+                  "pip install 'paddleocr>=3' 'paddlex[ocr]'",
+                  file=sys.stderr)
+            return 1
+
+        device = paddle_device()
+        print(f"\n=== Stage 1: PaddleOCR ({len(nums)} pages, warm model, "
+              f"device={device}) ===", flush=True)
+        ocr = PaddleOCR(
+            lang=args.lang,
+            device=device,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            enable_mkldnn=False,
+            cpu_threads=4,
+            # Emit per-character bboxes so inventory_to_layout.py can do
+            # per-character color sampling (in-bbox color changes).
+            return_word_box=True,
+        )
+        counts = run_ocr_batch(ocr, pairs, args.min_conf)
+        primary_ocr_label = "PP"
+    print(f"  OCR done in {time.time() - t0:.1f}s "
+          f"({sum(counts)} total detections, backend={args.ocr_backend})",
+          flush=True)
+    missing_ocr = [out_path.name for _, out_path in pairs if not out_path.exists()]
+    if missing_ocr:
+        print("ERROR: OCR failed to produce OCR JSON for: "
+              + ", ".join(missing_ocr), file=sys.stderr)
+        return 1
 
     # ---- Stage 2: cross-verify + review-packet build ----
     print(f"\n=== Stage 2: 3-engine cross-verify ({len(nums)} pages) ===",
@@ -413,7 +444,11 @@ def main() -> int:
             do_cross_verify=not args.skip_cross_verify,
             # Reuse the warm Paddle model from stage 1 for the 4th-engine
             # rescue pass on RED entries.
-            paddle_model=ocr if not args.skip_cross_verify else None,
+            paddle_model=(
+                ocr if args.ocr_backend == "paddle" and not args.skip_cross_verify
+                else None
+            ),
+            primary_ocr_label=primary_ocr_label,
         )
         tc = review.get("tier_counts", {})
         rs = review.get("rescue_stats", {})

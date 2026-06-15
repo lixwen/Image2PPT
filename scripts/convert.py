@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -21,6 +22,8 @@ SCRIPTS_ROOT = Path(__file__).resolve().parent
 
 
 def parse_args() -> argparse.Namespace:
+    default_ocr_backend = os.environ.get("DECKWEAVER_OCR_BACKEND", "paddle")
+    default_ocr_backend = default_ocr_backend.strip().lower() or "paddle"
     p = argparse.ArgumentParser(
         description="Convert one image or a folder of images into an editable PPTX."
     )
@@ -83,7 +86,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--ocr-threshold", type=float, default=0.95,
-        help="Paddle confidence threshold for OCR review queueing.",
+        help="OCR confidence threshold for review queueing.",
+    )
+    p.add_argument(
+        "--ocr-backend", choices=["paddle", "baidu"], default=default_ocr_backend,
+        help="OCR backend for image inputs (default: env "
+             "DECKWEAVER_OCR_BACKEND or paddle).",
     )
     p.add_argument(
         "--max-review-entries", type=int, default=50,
@@ -208,6 +216,7 @@ def main() -> int:
         "--work-dir", str(work),
         "--threshold", str(args.ocr_threshold),
         "--max-entries", str(args.max_review_entries),
+        "--ocr-backend", args.ocr_backend,
     ]
     if args.pages:
         prepare_cmd += ["--pages", args.pages]

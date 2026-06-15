@@ -39,6 +39,11 @@ def warmup_paddle() -> None:
     warnings.filterwarnings("ignore")
     os.environ.setdefault("GLOG_minloglevel", "3")
     os.environ.setdefault("FLAGS_print_log", "0")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+    os.environ.setdefault("PADDLE_PDX_CPU_NUM_THREADS", "4")
     try:
         from paddleocr import PaddleOCR
     except ImportError:
@@ -55,6 +60,8 @@ def warmup_paddle() -> None:
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
+        enable_mkldnn=False,
+        cpu_threads=4,
     )
     # Synthesize a tiny image — content doesn't matter, we just want
     # PaddleOCR to do its first-run model load.

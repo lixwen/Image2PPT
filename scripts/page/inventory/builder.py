@@ -337,6 +337,10 @@ class InventoryBuilder:
                 "bbox": [item["x1"], item["y1"], item["x2"], item["y2"]],
                 "confidence": item.get("confidence", 1.0),
             }
+            if item.get("ocr_backend"):
+                entry["ocr_backend"] = item["ocr_backend"]
+            if item.get("baidu_bbox_original"):
+                entry["baidu_bbox_original"] = list(item["baidu_bbox_original"])
             # PaddleOCR per-segment data: chars/char_boxes for pure-CJK,
             # words/word_boxes for every line.
             if "chars" in item and "char_boxes" in item:

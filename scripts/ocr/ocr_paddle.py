@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """PaddleOCR PP-OCRv5 wrapper — single-page or batch.
 
-This is the ONLY OCR backend in the skill. It reads slide images and
-emits axis-aligned text bboxes in source-image pixel coordinates as a
-JSON list of `{text, x1, y1, x2, y2, confidence}` objects. Downstream
+This is the local OCR backend. It reads slide images and emits
+axis-aligned text bboxes in source-image pixel coordinates as a JSON list
+of `{text, x1, y1, x2, y2, confidence}` objects. Downstream
 `erase_text.py`, `build_inventory.py`, `inventory_to_layout.py` consume
 this shape.
 
@@ -56,6 +56,11 @@ def quiet_paddle() -> None:
     warnings.filterwarnings("ignore")
     os.environ.setdefault("GLOG_minloglevel", "3")
     os.environ.setdefault("FLAGS_print_log", "0")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+    os.environ.setdefault("PADDLE_PDX_CPU_NUM_THREADS", "4")
 
 
 def poly_to_bbox(poly) -> tuple[int, int, int, int]:
@@ -154,6 +159,8 @@ def main() -> int:
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
+        enable_mkldnn=False,
+        cpu_threads=4,
         return_word_box=True,
     )
 

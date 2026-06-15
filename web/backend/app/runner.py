@@ -38,6 +38,7 @@ async def run_convert(
         str(s.convert_script),
         "--source", str(source),
         "--work-dir", str(work_dir),
+        "--ocr-backend", s.ocr_backend.strip().lower() or "paddle",
         # EasyOCR + Tesseract are optional cross-verifiers; skipping
         # them keeps the prod install (and the sandbox) lean. Set
         # DECKWEAVER_CROSS_VERIFY=true if you've installed them and
@@ -59,6 +60,21 @@ async def run_convert(
     )
 
     try:
+        if (s.ocr_backend or "").strip().lower() == "baidu":
+            env["DECKWEAVER_OCR_BACKEND"] = "baidu"
+            for key, value in {
+                "DECKWEAVER_BAIDU_OCR_API_KEY": s.baidu_ocr_api_key,
+                "DECKWEAVER_BAIDU_OCR_SECRET_KEY": s.baidu_ocr_secret_key,
+                "DECKWEAVER_BAIDU_OCR_ACCESS_TOKEN": s.baidu_ocr_access_token,
+                "DECKWEAVER_BAIDU_OCR_ENDPOINT": s.baidu_ocr_endpoint,
+                "DECKWEAVER_BAIDU_OCR_TOKEN_URL": s.baidu_ocr_token_url,
+                "DECKWEAVER_BAIDU_OCR_LANGUAGE_TYPE": s.baidu_ocr_language_type,
+                "DECKWEAVER_BAIDU_OCR_TIMEOUT_SECONDS": str(s.baidu_ocr_timeout_seconds),
+                "DECKWEAVER_BAIDU_OCR_RETRIES": str(s.baidu_ocr_retries),
+            }.items():
+                if value:
+                    env[key] = value
+
         proc = await asyncio.create_subprocess_exec(
             *wrapped,
             cwd=str(REPO_ROOT),

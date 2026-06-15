@@ -590,9 +590,10 @@ class LayoutBuilder:
                 return
         if self._is_empty_asset(crop, None, sparse_ok=sparse_visual):
             return
-        self._emit_role_specific_crop(el, asset_name, crop,
-                                      x1, y1, x2, y2,
-                                      scrub_icon_text)
+        if not self._emit_role_specific_crop(
+            el, asset_name, crop, x1, y1, x2, y2, scrub_icon_text,
+        ):
+            return
         self.manifest_assets.append({
             "name": asset_name,
             "box": [int(x1), int(y1), int(x2), int(y2)],
@@ -671,7 +672,7 @@ class LayoutBuilder:
     def _emit_role_specific_crop(self, el: dict, asset_name: str,
                                  crop: np.ndarray,
                                  x1: int, y1: int, x2: int, y2: int,
-                                 scrub_icon_text: bool) -> None:
+                                 scrub_icon_text: bool) -> bool:
         role = el.get("role")
         if role == "subicon":
             # White icon on dark bg → keep only near-white pixels opaque,
@@ -685,22 +686,22 @@ class LayoutBuilder:
                 crop, (int(x1), int(y1), int(x2), int(y2)),
                 self.text_boxes, alpha=alpha)
             rgba = np.dstack([crop, alpha])
-            cv2.imwrite(str(self.asset_dir / asset_name), rgba)
+            return bool(cv2.imwrite(str(self.asset_dir / asset_name), rgba))
         elif role in {"badge_subicon", "connector", "line_subicon"}:
             alpha = _line_art_alpha(crop)
             if int((alpha > 16).sum()) < 4:
-                return
+                return False
             crop = _scrub_text_boxes_from_icon_crop(
                 crop, (int(x1), int(y1), int(x2), int(y2)),
                 self.text_boxes, alpha=alpha)
             rgba = np.dstack([crop, alpha])
-            cv2.imwrite(str(self.asset_dir / asset_name), rgba)
+            return bool(cv2.imwrite(str(self.asset_dir / asset_name), rgba))
         else:
             if scrub_icon_text:
                 crop = _scrub_text_boxes_from_icon_crop(
                     crop, (int(x1), int(y1), int(x2), int(y2)),
                     self.text_boxes)
-            cv2.imwrite(str(self.asset_dir / asset_name), crop)
+            return bool(cv2.imwrite(str(self.asset_dir / asset_name), crop))
 
     # ------------------------------------------------------------------
     # Build orchestration

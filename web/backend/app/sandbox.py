@@ -41,7 +41,9 @@ from __future__ import annotations
 import os
 import resource
 import shutil
+import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 from .config import REPO_ROOT, get_settings
@@ -113,17 +115,45 @@ def make_preexec(*, memory_mb: int, cpu_seconds: int, output_mb: int):
     return _apply
 
 
+@lru_cache(maxsize=1)
+def _bwrap_usable() -> bool:
+    """Return whether bubblewrap can actually start in this environment."""
+    if not shutil.which("bwrap"):
+        return False
+    try:
+        probe = subprocess.run(
+            [
+                "bwrap",
+                "--ro-bind", "/", "/",
+                "--proc", "/proc",
+                "--dev", "/dev",
+                "--die-with-parent",
+                "--",
+                "true",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
+
+
 def _detect_backend(mode: str) -> str:
     """Resolve `auto` to a concrete backend name."""
     mode = (mode or "auto").strip()
     if mode == "none":
         return "none"
-    if mode in ("sandbox-exec", "bwrap", "firejail"):
+    if mode == "bwrap":
+        return "bwrap" if _bwrap_usable() else "none"
+    if mode in ("sandbox-exec", "firejail"):
         return mode if shutil.which(mode.split()[0]) else "none"
     # mode == "auto"
     if sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").exists():
         return "sandbox-exec"
-    if shutil.which("bwrap"):
+    if _bwrap_usable():
         return "bwrap"
     if shutil.which("firejail"):
         return "firejail"
