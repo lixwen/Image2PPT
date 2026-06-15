@@ -663,6 +663,25 @@ def _visible_char_count(text: str) -> int:
     return sum(1 for ch in text if not ch.isspace())
 
 
+def _is_baidu_text(el: dict[str, Any]) -> bool:
+    return str(el.get("ocr_backend") or "").strip().lower() == "baidu"
+
+
+def _backend_capped_ratio(el: dict[str, Any], ratio: float) -> float:
+    """Keep Baidu OCR's already-tight initial sizing from being inflated.
+
+    Baidu's character boxes are good enough for the first-pass size
+    estimate, but the preview calibration can over-read source ink around
+    long CJK lines and choose a larger font. That produces the visible
+    failure mode where body text grows from ~14pt to ~18pt. For Baidu,
+    allow calibration to shrink oversized text but do not let it enlarge
+    the first-pass estimate.
+    """
+    if _is_baidu_text(el):
+        return min(1.0, float(ratio))
+    return float(ratio)
+
+
 def _width_char_spacing(
     el: dict[str, Any],
     slide: dict[str, Any],
@@ -734,6 +753,20 @@ def _record_size_calibration(el: dict[str, Any],
     }
     if el.get("char_spacing") is not None:
         el["size_calibration"]["char_spacing"] = int(el["char_spacing"])
+
+
+def _calibrated_box_width(
+    el: dict[str, Any],
+    current_w: float,
+    target_w: float,
+    rendered_w: float,
+    scale_after: float,
+) -> int:
+    if _is_baidu_text(el):
+        needed_w = float(target_w)
+    else:
+        needed_w = max(float(target_w), float(rendered_w) * float(scale_after))
+    return int(round(max(float(current_w), needed_w + 12)))
 
 
 def _apply_iteration(layout: dict[str, Any],
@@ -814,6 +847,7 @@ def _apply_iteration(layout: dict[str, Any],
                     el, target, rendered, max_scale_step, min_ratio_change)
                 basis = "bbox"
                 constrained = True
+            ratio = _backend_capped_ratio(el, ratio)
             old_size, new_size, changed = _scale_element_size(
                 el, ratio, min_size, max_size, constrained=constrained)
             spacing_delta = _width_char_spacing(
@@ -833,8 +867,8 @@ def _apply_iteration(layout: dict[str, Any],
             if (el.get("align") or "").lower() != "center":
                 render_w = max(1.0, float(rendered[2]) - float(rendered[0]))
                 scale_after = float(new_size) / max(1.0, float(old_size))
-                needed_w = max(tx2 - tx1, render_w * scale_after)
-                box[2] = int(round(max(float(box[2]), needed_w + 12)))
+                box[2] = _calibrated_box_width(
+                    el, float(box[2]), tx2 - tx1, render_w, scale_after)
             box[3] = int(round(max(float(box[3]), (ty2 - ty1) + 8)))
 
             report.append({
